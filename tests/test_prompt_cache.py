@@ -214,10 +214,9 @@ def test_load_prompt_cache_rejects_unknown_class_paths_even_with_warning(tmp_pat
     with path.open("wb") as handle:
         pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with pytest.raises(PromptCacheSerializationError, match="non-allowlisted"):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            load_prompt_cache(path)
+    with pytest.raises(PromptCacheSerializationError, match="non-allowlisted"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        load_prompt_cache(path)
 
 
 def test_save_prompt_cache_rejects_unknown_format():

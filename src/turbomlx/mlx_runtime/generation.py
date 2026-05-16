@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from turbomlx._logging import get_logger
 from turbomlx.exceptions import UnsupportedConfigurationError
@@ -92,7 +92,7 @@ def _safe_state(cache):
 
 def _safe_nbytes(cache) -> int:
     try:
-        return int(getattr(cache, "nbytes"))
+        return int(cache.nbytes)
     except Exception:
         return recursive_nbytes(_safe_state(cache))
 
@@ -192,7 +192,7 @@ def stream_with_backend(
     *,
     max_tokens: int = 16,
     backend: Backend = "baseline",
-    config: Optional[TurboQuantConfig] = None,
+    config: TurboQuantConfig | None = None,
     prefill_step_size: int = 2048,
     sampler: Any | None = None,
 ) -> Iterator[StreamEvent]:
@@ -239,7 +239,7 @@ def generate_with_backend(
     *,
     max_tokens: int = 16,
     backend: Backend = "baseline",
-    config: Optional[TurboQuantConfig] = None,
+    config: TurboQuantConfig | None = None,
     prefill_step_size: int = 2048,
     sampler: Any | None = None,
 ):
@@ -305,7 +305,7 @@ def score_tokens_with_backend(
     prompt_tokens,
     *,
     backend: Backend = "baseline",
-    config: Optional[TurboQuantConfig] = None,
+    config: TurboQuantConfig | None = None,
     chunk_size: int = 512,
 ):
     """Compute per-token log probabilities using a backend-specific KV cache.

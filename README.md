@@ -1,10 +1,17 @@
 # Qwen3.5-TurboQuant-MLX-LM
 
-`TurboMLX v0.1 Research Preview`
+`TurboMLX v0.2 Modernization Preview`
 
 This repository packages the TurboMLX preview work for GitHub under the name `Qwen3.5-TurboQuant-MLX-LM`. The Python package and CLI remain `turbomlx`.
 
-TurboMLX `v0.1 Research Preview` currently targets Qwen3 / Qwen3.5 full-attention `KVCache` layers only.
+`v0.2` is a backward-compatible refresh on top of the `v0.1 Research Preview`:
+
+- **Dependencies**: refreshed envelopes (`mlx>=0.31.2,<0.32`, `mlx-lm>=0.31.3,<0.32`, NumPy 2.x support, `typer>=0.16`, `pytest>=8.3`)
+- **Performance**: ~52× faster `pack_bits`, `O(N log K)` `searchsorted` codebook lookup, batched perplexity scoring
+- **Security**: optional `safetensors`-backed prompt-cache (`v3`) and an opt-in class allowlist for legacy `pickle` loads
+- **API**: sampling strategies (`temperature`, `top-k`, `top-p`, `min-p`), `stream_with_backend` streaming events, `attention_sinks` dispatch wiring
+
+TurboMLX `v0.2` still targets Qwen3 / Qwen3.5 full-attention `KVCache` layers only.
 
 Its public contract for the current preview is:
 
@@ -26,11 +33,20 @@ Important limitations:
 
 ## Release Status
 
-- release label: `v0.1 Research Preview`
+- release label: `v0.2 Modernization Preview`
 - package identity: `turbomlx`
 - CLI: `turbomlx`
 - supported public preview target: Qwen3 / Qwen3.5 full-attention `KVCache` only
 - non-goal for this release: throughput parity with `mlx_quant`
+
+## Install
+
+```bash
+pip install -e .                  # core install (NumPy + Typer + reference math)
+pip install -e ".[mlx]"           # add the MLX runtime backend
+pip install -e ".[serialize]"     # add safetensors v3 prompt-cache support
+pip install -e ".[dev]"           # add pytest, ruff, mypy for development
+```
 
 ## Latest Verification Snapshot
 
@@ -180,10 +196,78 @@ Experimental:
 
 ## Tested Runtime Stack
 
-- `mlx==0.31.1`
-- `mlx-lm==0.31.1`
+- `mlx>=0.31.2,<0.32`
+- `mlx-lm>=0.31.3,<0.32`
+- `numpy>=1.26,<3` (NumPy 2.x supported)
+- `typer>=0.16`
+- optional `safetensors>=0.4.5` for the `v3` prompt-cache format
 
 This repository started from a blank directory plus the TurboQuant paper, so
 the current implementation emphasizes clean interfaces and verifiable reference
 math first. MLX runtime hardening is intentionally staged behind the preview
 release boundary.
+
+## v0.2 API Cheat Sheet
+
+```python
+from turbomlx import (
+    TurboQuantConfig, ScorerMode, ValuesMode,
+    generate_with_backend, stream_with_backend,
+    make_sampler, save_prompt_cache, load_prompt_cache,
+)
+
+config = TurboQuantConfig(bits_total=4, scorer_mode=ScorerMode.NATIVE_MLX)
+sampler = make_sampler(temperature=0.7, top_p=0.9, seed=42)
+
+# One-shot generation
+tokens, _logprobs, stats = generate_with_backend(
+    model, prompt, max_tokens=64, backend="turbomlx",
+    config=config, sampler=sampler,
+)
+
+# Streaming generation
+for event in stream_with_backend(
+    model, prompt, max_tokens=128, backend="turbomlx",
+    config=config, sampler=sampler,
+):
+    print(event.token, event.logprob, event.position)
+
+# safetensors-backed prompt cache (auto-selects v3 when installed)
+save_prompt_cache("cache.tqcache", prompt_cache_list)
+restored = load_prompt_cache("cache.tqcache")
+```
+
+## v0.2 CLI Additions
+
+The `turbomlx generate` command grew sampler flags:
+
+```bash
+turbomlx generate MODEL_ID "PROMPT" \
+    --backend turbomlx \
+    --bits-total 4 \
+    --scorer-mode native_mlx \
+    --temperature 0.7 \
+    --top-p 0.9 \
+    --top-k 40 \
+    --min-p 0.05 \
+    --seed 42
+```
+
+`--temperature 0` (the default) selects greedy argmax decoding so existing
+invocations behave exactly like `v0.1`.
+
+## Logging
+
+TurboMLX uses the standard `logging` module with a `NullHandler` attached by
+default. Opt in to diagnostic output:
+
+```bash
+TURBOMLX_LOG_LEVEL=DEBUG turbomlx benchmark MODEL_ID
+```
+
+or programmatically:
+
+```python
+import logging
+logging.getLogger("turbomlx").setLevel(logging.INFO)
+```

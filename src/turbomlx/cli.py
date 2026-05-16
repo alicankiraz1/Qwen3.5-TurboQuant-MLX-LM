@@ -127,7 +127,7 @@ def benchmark(
     """Run a warmup/repeat synthetic benchmark and report scorer route metadata."""
     mx, _base, _cache = _require_runtime()
     loader = _load_mlx_lm_loader()
-    model, tokenizer, config = loader(model_id, return_config=True)
+    model, _tokenizer, config = loader(model_id, return_config=True)
     vocab_size = config.get("vocab_size") or config["text_config"]["vocab_size"]
     prompt = mx.random.randint(0, vocab_size, (prompt_tokens,), dtype=mx.int32)
     tq_config = _make_config(

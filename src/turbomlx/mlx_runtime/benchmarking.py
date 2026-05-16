@@ -6,7 +6,6 @@ from statistics import median
 
 from turbomlx.mlx_runtime.generation import GenerationStats, generate_with_backend
 
-
 _NUMERIC_STAT_FIELDS = (
     "prompt_tokens",
     "generation_tokens",

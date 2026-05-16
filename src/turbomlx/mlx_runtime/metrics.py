@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import sys
+from dataclasses import asdict, dataclass
 from typing import Any
 
 
@@ -20,7 +20,7 @@ def recursive_nbytes(value: Any, _seen_ids: set[int] | None = None) -> int:
     _seen_ids.add(value_id)
 
     try:
-        nbytes = getattr(value, "nbytes")
+        nbytes = value.nbytes
     except Exception:
         nbytes = None
     if nbytes is not None:

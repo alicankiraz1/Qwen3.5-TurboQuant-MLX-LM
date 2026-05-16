@@ -2,8 +2,8 @@ import subprocess
 
 import pytest
 
-from turbomlx.mlx_runtime import availability
 from turbomlx.exceptions import UnsupportedRuntimeVersionError
+from turbomlx.mlx_runtime import availability
 
 
 def test_mlx_runtime_available_returns_false_when_probe_fails(monkeypatch):

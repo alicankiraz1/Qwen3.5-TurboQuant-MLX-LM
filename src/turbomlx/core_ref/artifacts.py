@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 
 from .codebooks import CODEBOOK_VERSION, CodebookEntry, CodebookKey, CodebookStore
 from .qjl import QJLSpec, load_or_create_qjl
@@ -17,7 +17,7 @@ class SharedArtifacts:
     qjl: QJLSpec
 
 
-@lru_cache(maxsize=None)
+@cache
 def resolve_shared_artifacts(
     head_dim: int,
     bits: int,

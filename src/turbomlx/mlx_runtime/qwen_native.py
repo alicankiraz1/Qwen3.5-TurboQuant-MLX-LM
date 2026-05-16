@@ -6,7 +6,6 @@ from turbomlx.exceptions import MissingDependencyError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime, mlx_runtime_available
 from turbomlx.mlx_runtime.config import TurboQuantMode, ValuesMode
 
-
 _MX_RUNTIME_READY = mlx_runtime_available()
 mx = None
 

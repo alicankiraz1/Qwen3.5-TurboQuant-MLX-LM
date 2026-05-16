@@ -66,7 +66,7 @@ class MixedPrecisionProfileConfig:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, int | str]) -> "MixedPrecisionProfileConfig":
+    def from_dict(cls, payload: dict[str, int | str]) -> MixedPrecisionProfileConfig:
         return cls(
             outlier_channels=int(payload["outlier_channels"]),
             outlier_high_bits=int(payload["outlier_high_bits"]),
@@ -100,11 +100,13 @@ class TurboQuantConfig:
             raise UnsupportedConfigurationError("mode=prod requires bits_total >= 2")
         if self.values_mode == ValuesMode.AFFINE and self.value_bits < 1:
             raise UnsupportedConfigurationError("value_bits must be >= 1 for affine values")
-        if self.mixed_precision is not None:
-            if self.mixed_precision.outlier_high_bits <= self.mixed_precision.regular_bits:
-                raise UnsupportedConfigurationError(
-                    "outlier_high_bits must be greater than regular_bits in mixed precision mode"
-                )
+        if (
+            self.mixed_precision is not None
+            and self.mixed_precision.outlier_high_bits <= self.mixed_precision.regular_bits
+        ):
+            raise UnsupportedConfigurationError(
+                "outlier_high_bits must be greater than regular_bits in mixed precision mode"
+            )
 
     @property
     def bits_mse(self) -> int:

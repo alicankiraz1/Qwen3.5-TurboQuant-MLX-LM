@@ -10,7 +10,7 @@ from .artifacts import resolve_shared_artifacts
 from .codebooks import CODEBOOK_VERSION
 from .packing import pack_bits, pack_sign_bits, unpack_bits, unpack_sign_bits
 from .qjl import QJLSpec, qjl_dequantize, qjl_quantize_signs, qjl_score_correction
-from .rotation import RotationSpec, apply_inverse_rotation, apply_rotation
+from .rotation import apply_inverse_rotation, apply_rotation
 
 _EPS = 1e-8
 

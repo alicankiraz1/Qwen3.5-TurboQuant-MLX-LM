@@ -120,11 +120,20 @@ select = [
 ignore = [
   "E501",
   "B008",
+  "B905",
   "SIM108",
+  "SIM113",
+  "RUF005",
+  "RUF007",
+  "RUF046",
+  "RUF059",
+  "UP042",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]
+"tests/*" = ["B011", "B017", "RUF043"]
+"src/turbomlx/core_ref/codebooks.py" = ["B905", "RUF007"]
+"src/turbomlx/mlx_runtime/config.py" = ["UP042"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["turbomlx"]

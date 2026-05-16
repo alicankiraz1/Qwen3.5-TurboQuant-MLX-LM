@@ -7,8 +7,7 @@ import pytest
 
 from turbomlx.exceptions import UnsupportedConfigurationError
 from turbomlx.mlx_runtime import generation
-from turbomlx.mlx_runtime.config import TurboQuantConfig
-from turbomlx.mlx_runtime.config import ScorerMode
+from turbomlx.mlx_runtime.config import ScorerMode, TurboQuantConfig
 from turbomlx.mlx_runtime.generation import _cache_metrics, _effective_scorer_route, convert_prompt_cache
 from turbomlx.mlx_runtime.metrics import MemoryMetrics
 

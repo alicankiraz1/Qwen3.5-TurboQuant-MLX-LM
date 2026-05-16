@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-from importlib import metadata
-from importlib import import_module
 import subprocess
 import sys
+from functools import lru_cache
+from importlib import import_module, metadata
 
 from turbomlx.exceptions import MissingDependencyError, UnsupportedRuntimeVersionError
-
 
 _SUPPORTED_MLX_MIN = (0, 31, 2)
 _SUPPORTED_MLX_MAX_EXCLUSIVE = (0, 32, 0)
