@@ -52,6 +52,9 @@ class _MetricsAwareCache:
 
 
 class _FakeMx:
+    int32 = np.int32
+    float32 = np.float32
+
     def logsumexp(self, logits, axis=-1, keepdims=True):
         return np.log(np.sum(np.exp(logits), axis=axis, keepdims=keepdims))
 
@@ -66,6 +69,9 @@ class _FakeMx:
 
     def array(self, value, dtype=None):
         return np.array(value, dtype=dtype)
+
+    def zeros(self, shape, dtype=None):
+        return np.zeros(shape, dtype=dtype or np.float32)
 
 
 def test_convert_prompt_cache_rejects_unsupported_rotating_cache(monkeypatch):
@@ -153,6 +159,45 @@ def test_effective_scorer_route_reports_native_when_no_fallback_occurred():
         TurboQuantConfig(bits_total=4, scorer_mode=ScorerMode.NATIVE_MLX),
     )
     assert route == "native_mlx"
+
+
+def test_score_tokens_with_backend_uses_single_chunked_forward_pass(monkeypatch):
+    """Batched scoring should issue O(prompt/chunk_size) forward passes, not one per token."""
+    fake_mx = _FakeMx()
+    cache_mod = SimpleNamespace(make_prompt_cache=lambda _model: [SimpleNamespace(state=())])
+
+    forward_calls: list[int] = []
+
+    def fake_take_along_axis(values, indices, axis=-1):
+        gathered = np.take_along_axis(values, indices, axis=axis)
+        return gathered
+
+    fake_mx.take_along_axis = fake_take_along_axis
+    fake_mx.concatenate = lambda items, axis=0: np.concatenate(list(items), axis=axis)
+
+    class _DeterministicModel:
+        def __call__(self, inputs, cache=None):
+            forward_calls.append(int(inputs.shape[1]))
+            seq_len = int(inputs.shape[1])
+            return np.tile(np.arange(4, dtype=np.float32)[None, None, :], (1, seq_len, 1))
+
+    monkeypatch.setattr(generation, "mlx_runtime_available", lambda: True)
+    monkeypatch.setattr(generation, "ensure_mlx_runtime", lambda: (fake_mx, object(), cache_mod))
+    monkeypatch.setattr(generation, "patch_attention_dispatch", lambda: None)
+    monkeypatch.setattr(generation, "convert_prompt_cache", lambda prompt_cache, config, backend="turbomlx": prompt_cache)
+
+    prompt_tokens = np.array([0, 1, 2, 3, 0, 1, 2, 3], dtype=np.int32)
+    token_logprobs, _metrics = generation.score_tokens_with_backend(
+        _DeterministicModel(),
+        prompt_tokens,
+        backend="baseline",
+        config=TurboQuantConfig(bits_total=4),
+        chunk_size=4,
+    )
+
+    assert token_logprobs.shape == (7,)
+    assert forward_calls == [4, 3]
+    assert len(forward_calls) < prompt_tokens.size - 1
 
 
 def test_generate_with_backend_counts_full_prompt_elapsed_and_only_timed_decode_tokens(monkeypatch):

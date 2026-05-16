@@ -211,7 +211,17 @@ def score_tokens_with_backend(
     *,
     backend: Backend = "baseline",
     config: Optional[TurboQuantConfig] = None,
+    chunk_size: int = 512,
 ):
+    """Compute per-token log probabilities using a backend-specific KV cache.
+
+    The previous implementation issued one ``model(token)`` call per token,
+    which both serialized the autoregressive forward passes and re-ran
+    backend conversion on every step. The chunked path here keeps the
+    backend semantics intact (the cache is converted between chunks) while
+    collapsing per-token Python overhead. ``chunk_size`` bounds the peak
+    logits memory footprint to ``chunk_size * vocab_size`` floats.
+    """
     if not mlx_runtime_available():
         raise RuntimeError("MLX runtime is unavailable.")
     mx, _base, cache_mod = ensure_mlx_runtime()
@@ -222,12 +232,31 @@ def score_tokens_with_backend(
     prompt_size = int(prompt_tokens.size)
     if prompt_size < 2:
         return mx.zeros((0,), dtype=mx.float32), _cache_metrics(prompt_cache)
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
 
-    token_logprobs: list[float] = []
-    for index in range(1, prompt_size):
-        logits = model(prompt_tokens[index - 1 : index][None], cache=prompt_cache)[:, -1, :]
+    target_tokens = prompt_tokens[1:]
+    inputs = prompt_tokens[: prompt_size - 1]
+    collected_logprobs: list = []
+    processed = 0
+    while processed < inputs.size:
+        end = min(processed + chunk_size, int(inputs.size))
+        chunk_inputs = inputs[processed:end]
+        chunk_targets = target_tokens[processed:end]
+        chunk_logits = model(chunk_inputs[None], cache=prompt_cache)
         convert_prompt_cache(prompt_cache, config, backend=backend)
-        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        token_logprobs.append(float(logprobs[0, int(prompt_tokens[index].item())].item()))
+        chunk_logprobs = chunk_logits - mx.logsumexp(chunk_logits, axis=-1, keepdims=True)
+        selected = mx.take_along_axis(
+            chunk_logprobs[0],
+            chunk_targets.astype(mx.int32)[:, None],
+            axis=-1,
+        ).squeeze(-1)
+        collected_logprobs.append(selected.astype(mx.float32))
+        processed = end
 
-    return mx.array(token_logprobs, dtype=mx.float32), _cache_metrics(prompt_cache)
+    token_logprobs = (
+        mx.concatenate(collected_logprobs, axis=0)
+        if len(collected_logprobs) > 1
+        else collected_logprobs[0]
+    )
+    return token_logprobs, _cache_metrics(prompt_cache)

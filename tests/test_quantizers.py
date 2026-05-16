@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from turbomlx.core_ref.quantizers import MSEPayload, ProdPayload, TurboQuantMSERef, TurboQuantProdRef
+from turbomlx.core_ref.rotation import apply_rotation
 
 
 def _random_unit_vectors(num_vectors: int, dim: int, seed: int = 0) -> np.ndarray:
@@ -70,3 +71,30 @@ def test_prod_payload_codebook_mismatch_raises():
     )
     with pytest.raises(ValueError):
         quantizer.score_matrix(_random_unit_vectors(8, 8, seed=7).reshape(1, 2, 4, 8), bad_payload)
+
+
+def test_searchsorted_quantization_matches_argmin_reference():
+    """Searchsorted-based assignment must reproduce the legacy argmin output."""
+    vectors = _random_unit_vectors(128, 16, seed=42)
+    quantizer = TurboQuantMSERef(16, 3)
+    fast_indices = quantizer._quantize_unit(
+        vectors / np.maximum(np.linalg.norm(vectors, axis=-1, keepdims=True), 1e-8)
+    )
+    rotated = apply_rotation(
+        vectors / np.maximum(np.linalg.norm(vectors, axis=-1, keepdims=True), 1e-8),
+        quantizer.rotation,
+    )
+    legacy_indices = np.argmin(
+        np.abs(rotated[..., None] - quantizer.centroids[None, :]), axis=-1
+    ).astype(np.uint8)
+    assert np.array_equal(fast_indices, legacy_indices)
+
+
+def test_quantize_memory_path_avoids_centroid_broadcast_blowup():
+    """Quantizing a wide tensor must not allocate the K-fold broadcast tensor."""
+    rng = np.random.default_rng(0)
+    keys = rng.standard_normal((1, 4, 64, 32), dtype=np.float32)
+    quantizer = TurboQuantMSERef(32, 4)
+    payload = quantizer.quantize(keys)
+    reconstructed = quantizer.dequantize(payload)
+    assert reconstructed.shape == keys.shape
