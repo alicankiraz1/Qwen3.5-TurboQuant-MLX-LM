@@ -15,6 +15,7 @@ from .mlx_runtime.config import (
     ValuesMode,
     default_mode_for_bits,
 )
+from .prompt_cache import register_cache_type
 
 __all__ = [
     "MixedPrecisionProfileConfig",
@@ -27,5 +28,6 @@ __all__ = [
     "default_mode_for_bits",
     "generate_with_backend",
     "load_prompt_cache",
+    "register_cache_type",
     "save_prompt_cache",
 ]
