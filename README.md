@@ -2,6 +2,16 @@
 
 ![TurboMLX v0.2 — Modernization Preview: -50% key-path memory vs baseline, 0.99994 cosine similarity vs baseline, 52x pack_bits speedup, measured on Apple M5 Max with Qwen3.5-9B-MLX-4bit](docs/announcement/turbomlx-v0-2-hero.png)
 
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-D22128?logo=apache&logoColor=white)](LICENSE)
+[![mlx](https://img.shields.io/badge/mlx-%E2%89%A50.31.2-orange?logo=apple&logoColor=white)](https://github.com/ml-explore/mlx)
+[![mlx-lm](https://img.shields.io/badge/mlx--lm-%E2%89%A50.31.3-orange?logo=apple&logoColor=white)](https://github.com/ml-explore/mlx-lm)
+[![NumPy](https://img.shields.io/badge/numpy-1.26%20%7C%202.x-013243?logo=numpy&logoColor=white)](https://numpy.org/)
+[![Tests](https://img.shields.io/badge/tests-103%20passing-30D158?logo=pytest&logoColor=white)](#verification)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-FCC21B?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-M2%20%7C%20M3%20%7C%20M4%20%7C%20M5-555555?logo=apple&logoColor=white)](#v02-verification-snapshot)
+[![Model: Qwen3.5](https://img.shields.io/badge/model-Qwen3.5--9B--MLX--4bit-5e5ce6)](https://huggingface.co/mlx-community/Qwen3.5-9B-MLX-4bit)
+
 `TurboMLX v0.2 Modernization Preview`
 
 This repository packages the TurboMLX preview work for GitHub under the name `Qwen3.5-TurboQuant-MLX-LM`. The Python package and CLI remain `turbomlx`.
@@ -48,6 +58,83 @@ pip install -e .                  # core install (NumPy + Typer + reference math
 pip install -e ".[mlx]"           # add the MLX runtime backend
 pip install -e ".[serialize]"     # add safetensors v3 prompt-cache support
 pip install -e ".[dev]"           # add pytest, ruff, mypy for development
+```
+
+> Direct install from GitHub for downstream consumers:
+> `pip install "turbomlx[mlx,serialize] @ git+https://github.com/alicankiraz1/Qwen3.5-TurboQuant-MLX-LM.git@main"`
+
+## Quickstart
+
+Three minimum steps from a fresh Apple Silicon machine to TurboQuant-active
+generation on Qwen3.5-9B-MLX-4bit. Each step is independent of the other
+two and can be run in isolation.
+
+### 1. Install with the MLX runtime extra
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/pip install -e ".[mlx,serialize]"
+```
+
+### 2. Run a CLI generation through the `turbomlx + native_mlx` path
+
+```bash
+.venv/bin/turbomlx generate \
+    mlx-community/Qwen3.5-9B-MLX-4bit \
+    "Explain Apple Silicon unified memory in one paragraph." \
+    --backend turbomlx \
+    --scorer-mode native_mlx \
+    --bits-total 4 \
+    --max-tokens 96 \
+    --temperature 0.0
+```
+
+The trailing JSON block surfaces `scorer_route`, `prompt_tps`, `generation_tps`,
+`key_path_bytes`, and `native_working_set_bytes` so you can confirm
+TurboQuant actually engaged (`scorer_route` should read `native_mlx`).
+
+### 3. Drive generation from Python with the new sampler + streaming API
+
+```python
+from mlx_lm import load
+from turbomlx import (
+    ScorerMode,
+    TurboQuantConfig,
+    generate_with_backend,
+    make_sampler,
+    stream_with_backend,
+)
+
+model, tokenizer = load("mlx-community/Qwen3.5-9B-MLX-4bit")
+tokens = tokenizer.encode("List three Apple Silicon GPU benefits.", return_tensors="mlx")[0]
+
+config = TurboQuantConfig(bits_total=4, scorer_mode=ScorerMode.NATIVE_MLX)
+sampler = make_sampler(temperature=0.7, top_p=0.9, seed=42)
+
+# One-shot generation
+generated, _logprobs, stats = generate_with_backend(
+    model, tokens, max_tokens=64,
+    backend="turbomlx", config=config, sampler=sampler,
+)
+print(tokenizer.decode(generated.tolist()))
+print(f"route={stats.scorer_route} | decode_tps={stats.generation_tps:.1f}")
+
+# Streaming generation (token-by-token)
+for event in stream_with_backend(
+    model, tokens, max_tokens=64,
+    backend="turbomlx", config=config, sampler=sampler,
+):
+    print(event.position, event.token, f"{event.logprob:.3f}")
+```
+
+### Reproduce the verification snapshot
+
+```bash
+# 4-backend benchmark (baseline / mlx_quant / turbomlx oracle / turbomlx native_mlx)
+.venv/bin/python scripts/compare_backends.py --prompt-tokens 2048 --generation-tokens 64
+
+# Last-token logit fidelity vs baseline
+.venv/bin/python scripts/quality_check.py
 ```
 
 ## v0.2 Verification Snapshot
@@ -329,3 +416,28 @@ or programmatically:
 import logging
 logging.getLogger("turbomlx").setLevel(logging.INFO)
 ```
+
+## Author
+
+**Alican Kiraz** — Sr. Staff Engineer at Trendyol Group, based in Istanbul.
+
+`Ai & Ai Agent Model Craftsman · Biohacking and Robotics Enthusiast`
+
+- GitHub: [@alicankiraz1](https://github.com/alicankiraz1)
+- Twitter / X: [@AlicanKiraz0](https://x.com/AlicanKiraz0)
+- Medium: [alican-kiraz1.medium.com](https://alican-kiraz1.medium.com/)
+
+If TurboMLX `v0.2` is useful for your Apple Silicon LLM work, a GitHub star
+helps reach others who might benefit from a Qwen-first TurboQuant runtime.
+Issues, discussions, and pull requests are welcome via the GitHub Issues
+tracker — particularly benchmark contributions from other Apple Silicon
+generations (M2 / M3 / M4) so the verification matrix stays honest.
+
+## License
+
+Released under the [Apache License 2.0](LICENSE). TurboMLX is an independent
+implementation of the TurboQuant key-path quantization recipe published in
+the TurboQuant paper; the implementation does not bundle any third-party
+source under a more restrictive license. The optional MLX runtime backend
+ships separately under [`mlx`](https://github.com/ml-explore/mlx) (MIT) and
+[`mlx-lm`](https://github.com/ml-explore/mlx-lm) (MIT).
