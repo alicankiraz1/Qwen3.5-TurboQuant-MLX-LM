@@ -1,5 +1,7 @@
 # Qwen3.5-TurboQuant-MLX-LM
 
+![TurboMLX v0.2 — Modernization Preview: -50% key-path memory vs baseline, 0.99994 cosine similarity vs baseline, 52x pack_bits speedup, measured on Apple M5 Max with Qwen3.5-9B-MLX-4bit](docs/announcement/turbomlx-v0-2-hero.png)
+
 `TurboMLX v0.2 Modernization Preview`
 
 This repository packages the TurboMLX preview work for GitHub under the name `Qwen3.5-TurboQuant-MLX-LM`. The Python package and CLI remain `turbomlx`.
