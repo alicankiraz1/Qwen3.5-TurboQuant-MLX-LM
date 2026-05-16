@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
+from turbomlx._logging import get_logger
 from turbomlx.exceptions import UnsupportedConfigurationError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime, mlx_runtime_available
 from turbomlx.mlx_runtime.cache import TurboQuantKVCache
 from turbomlx.mlx_runtime.config import ScorerMode, TurboQuantConfig
 from turbomlx.mlx_runtime.metrics import MemoryMetrics, recursive_nbytes
 from turbomlx.mlx_runtime.patching import patch_attention_dispatch
+from turbomlx.mlx_runtime.sampling import make_sampler
+
+_LOGGER = get_logger(__name__)
 
 Backend = Literal["baseline", "mlx_quant", "turbomlx"]
+
+
+@dataclass(slots=True)
+class StreamEvent:
+    """Yielded by :func:`stream_with_backend` for each generated token."""
+
+    token: int
+    logprob: float
+    position: int
 
 
 @dataclass(slots=True)
@@ -136,6 +150,89 @@ def _effective_scorer_route(prompt_cache, backend: Backend, config: TurboQuantCo
     return config.scorer_mode.value
 
 
+def _resolve_sampler(sampler: Any | None, mx_module: Any) -> Any:
+    """Return a sampler callable, defaulting to greedy argmax decoding."""
+    if sampler is not None:
+        return sampler
+    return make_sampler(temperature=0.0, mx_module=mx_module)
+
+
+def _prefill_prompt(model, prompt_cache, prompt_tokens, config, backend, prefill_step_size, mx_module):
+    """Run the prefill loop in fixed-size chunks and return per-position logits.
+
+    Returns ``(prompt_size, last_logits, prompt_elapsed)``. The cache is
+    advanced in place and converted between chunks via
+    :func:`convert_prompt_cache` so the backend semantics are unchanged.
+    """
+    prompt_size = int(prompt_tokens.size)
+    if prompt_size == 0:
+        raise UnsupportedConfigurationError("prompt_tokens must contain at least one token")
+    if prefill_step_size < 1:
+        raise UnsupportedConfigurationError("prefill_step_size must be >= 1")
+
+    prompt_start = time.perf_counter()
+    processed = 0
+    while prompt_size - processed > 1:
+        remaining = (prompt_size - processed) - 1
+        n_to_process = min(prefill_step_size, remaining)
+        model(prompt_tokens[processed: processed + n_to_process][None], cache=prompt_cache)
+        convert_prompt_cache(prompt_cache, config, backend=backend)
+        mx_module.eval([cache.state for cache in prompt_cache])
+        processed += n_to_process
+
+    logits = model(prompt_tokens[processed:][None], cache=prompt_cache)[:, -1, :]
+    convert_prompt_cache(prompt_cache, config, backend=backend)
+    prompt_elapsed = max(time.perf_counter() - prompt_start, 1e-6)
+    return prompt_size, logits, prompt_elapsed
+
+
+def stream_with_backend(
+    model,
+    prompt_tokens,
+    *,
+    max_tokens: int = 16,
+    backend: Backend = "baseline",
+    config: Optional[TurboQuantConfig] = None,
+    prefill_step_size: int = 2048,
+    sampler: Any | None = None,
+) -> Iterator[StreamEvent]:
+    """Yield each generated token as a :class:`StreamEvent`.
+
+    The stream variant is the single source of truth for autoregressive
+    decoding; :func:`generate_with_backend` materializes the same stream
+    and adds timing aggregates around it. The sampler signature mirrors
+    :func:`turbomlx.mlx_runtime.sampling.make_sampler`; passing ``None``
+    selects greedy argmax decoding to preserve v0.1 behavior.
+    """
+    if not mlx_runtime_available():
+        raise RuntimeError("MLX runtime is unavailable.")
+    mx, _base, cache_mod = ensure_mlx_runtime()
+    patch_attention_dispatch()
+    config = config or TurboQuantConfig(bits_total=4)
+    prompt_cache = cache_mod.make_prompt_cache(model)
+    chosen_sampler = _resolve_sampler(sampler, mx)
+
+    _prompt_size, logits, _prompt_elapsed = _prefill_prompt(
+        model, prompt_cache, prompt_tokens, config, backend, prefill_step_size, mx
+    )
+    position = 0
+    for _ in range(max(max_tokens, 0)):
+        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+        next_token = chosen_sampler(logprobs)
+        if next_token.ndim > 0:
+            scalar_token = int(next_token[0].item())
+        else:
+            scalar_token = int(next_token.item())
+        chosen_logprob = float(logprobs[0, scalar_token].item())
+        yield StreamEvent(token=scalar_token, logprob=chosen_logprob, position=position)
+        position += 1
+        if position >= max_tokens:
+            break
+        feed = mx.array([scalar_token], dtype=getattr(prompt_tokens, "dtype", mx.int32))
+        logits = model(feed[None], cache=prompt_cache)[:, -1, :]
+        convert_prompt_cache(prompt_cache, config, backend=backend)
+
+
 def generate_with_backend(
     model,
     prompt_tokens,
@@ -144,41 +241,39 @@ def generate_with_backend(
     backend: Backend = "baseline",
     config: Optional[TurboQuantConfig] = None,
     prefill_step_size: int = 2048,
+    sampler: Any | None = None,
 ):
+    """Greedy or sampled decode wrapping :func:`stream_with_backend` with timing."""
     if not mlx_runtime_available():
         raise RuntimeError("MLX runtime is unavailable.")
     mx, _base, cache_mod = ensure_mlx_runtime()
     patch_attention_dispatch()
     config = config or TurboQuantConfig(bits_total=4)
     prompt_cache = cache_mod.make_prompt_cache(model)
+    chosen_sampler = _resolve_sampler(sampler, mx)
 
-    prompt_size = int(prompt_tokens.size)
-    processed = 0
     total_start = time.perf_counter()
-    prompt_start = time.perf_counter()
-
-    while prompt_size - processed > 1:
-        remaining = (prompt_size - processed) - 1
-        n_to_process = min(prefill_step_size, remaining)
-        model(prompt_tokens[processed : processed + n_to_process][None], cache=prompt_cache)
-        convert_prompt_cache(prompt_cache, config, backend=backend)
-        mx.eval([c.state for c in prompt_cache])
-        processed += n_to_process
-
-    logits = model(prompt_tokens[processed:][None], cache=prompt_cache)[:, -1, :]
-    convert_prompt_cache(prompt_cache, config, backend=backend)
-    prompt_elapsed = max(time.perf_counter() - prompt_start, 1e-6)
+    prompt_size, logits, prompt_elapsed = _prefill_prompt(
+        model, prompt_cache, prompt_tokens, config, backend, prefill_step_size, mx
+    )
     prompt_tps = prompt_size / prompt_elapsed if prompt_size > 0 else 0.0
+
     logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-    next_token = mx.argmax(logprobs, axis=-1)
-    generated = [int(next_token.item())]
+    first_token = chosen_sampler(logprobs)
+    if first_token.ndim > 0:
+        first_token = first_token[0]
+    generated = [int(first_token.item())]
+    last_logprobs = logprobs
 
     decode_start = time.perf_counter()
+    next_token = first_token
     for _ in range(max_tokens - 1):
-        logits = model(next_token[None], cache=prompt_cache)[:, -1, :]
+        feed = mx.array([int(next_token.item())], dtype=getattr(prompt_tokens, "dtype", mx.int32))
+        logits = model(feed[None], cache=prompt_cache)[:, -1, :]
         convert_prompt_cache(prompt_cache, config, backend=backend)
-        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        next_token = mx.argmax(logprobs, axis=-1)
+        last_logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+        sampled = chosen_sampler(last_logprobs)
+        next_token = sampled[0] if sampled.ndim > 0 else sampled
         generated.append(int(next_token.item()))
 
     decode_elapsed = max(time.perf_counter() - decode_start, 1e-6)
@@ -202,7 +297,7 @@ def generate_with_backend(
         backend=backend,
         scorer_route=scorer_route,
     )
-    return mx.array(generated), logprobs.squeeze(0), stats
+    return mx.array(generated), last_logprobs.squeeze(0), stats
 
 
 def score_tokens_with_backend(

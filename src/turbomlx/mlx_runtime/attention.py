@@ -176,13 +176,28 @@ def turboquant_scaled_dot_product_attention(queries, _keys, value_state, cache, 
 
 
 def dispatch_attention(previous):
+    """Wrap the upstream ``scaled_dot_product_attention`` symbol.
+
+    The patched dispatcher accepts the optional ``sinks`` argument that
+    mlx-lm 0.31.3+ added for attention-sink models. TurboQuantKVCache does
+    not have a key-path implementation of the sink interaction yet, so we
+    explicitly raise an :class:`UnsupportedConfigurationError` with a
+    descriptive message instead of silently dropping sinks; for every
+    non-TurboQuant cache we forward the sinks argument verbatim so the
+    upstream stack is untouched.
+    """
     if not _MX_RUNTIME_READY:
         raise MissingDependencyError("MLX runtime dependencies are missing.")
 
     def _patched(queries, keys, values, cache, scale, mask, sinks=None):
         if _is_turboquant_cache(cache):
             if sinks is not None:
-                raise ValueError("TurboQuantKVCache does not support attention sinks.")
+                from turbomlx.exceptions import UnsupportedConfigurationError
+
+                raise UnsupportedConfigurationError(
+                    "TurboQuantKVCache does not support attention sinks. "
+                    "Switch to backend='baseline' or backend='mlx_quant' for sink-using models."
+                )
             return turboquant_scaled_dot_product_attention(queries, keys, values, cache, scale, mask)
         return previous(queries, keys, values, cache, scale=scale, mask=mask, sinks=sinks)
 

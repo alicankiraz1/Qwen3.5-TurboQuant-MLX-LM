@@ -8,11 +8,11 @@ from pathlib import Path
 import numpy as np
 import typer
 
-from turbomlx.exceptions import MissingDependencyError, UnsupportedRuntimeVersionError
-from turbomlx.eval.logit import logit_cosine_similarity
 from turbomlx.eval.jsonl_eval import evaluate_jsonl_backend
+from turbomlx.eval.logit import logit_cosine_similarity
 from turbomlx.eval.needle import run_needle_backend_eval
 from turbomlx.eval.perplexity import perplexity_from_text_file
+from turbomlx.exceptions import MissingDependencyError, UnsupportedRuntimeVersionError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime
 from turbomlx.mlx_runtime.benchmarking import run_benchmark_series
 from turbomlx.mlx_runtime.config import (
@@ -22,6 +22,7 @@ from turbomlx.mlx_runtime.config import (
     ValuesMode,
 )
 from turbomlx.mlx_runtime.generation import generate_with_backend
+from turbomlx.mlx_runtime.sampling import make_sampler
 
 app = typer.Typer(help="TurboMLX companion CLI for mlx-lm.")
 
@@ -68,9 +69,19 @@ def generate(
     value_bits: int = 4,
     quantized_kv_start: int = 0,
     scorer_mode: ScorerMode = ScorerMode.ORACLE_PREVIEW,
+    temperature: float = 0.0,
+    top_k: int = 0,
+    top_p: float = 0.0,
+    min_p: float = 0.0,
+    seed: int | None = None,
 ):
-    """Generate text with baseline, mlx_quant, or TurboMLX backend."""
-    mx, _base, _cache = _require_runtime()
+    """Generate text with baseline, mlx_quant, or TurboMLX backend.
+
+    Defaults to greedy argmax decoding (``temperature=0``). Pass any of
+    ``--temperature``, ``--top-k``, ``--top-p``, or ``--min-p`` to enable
+    categorical sampling. ``--seed`` controls the sampler RNG.
+    """
+    _mx, _base, _cache = _require_runtime()
     loader = _load_mlx_lm_loader()
     model, tokenizer = loader(model_id)
     tokens = tokenizer.encode(prompt, return_tensors="mlx")[0]
@@ -82,12 +93,20 @@ def generate(
         quantized_kv_start,
         scorer_mode=scorer_mode,
     )
+    sampler = make_sampler(
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        min_p=min_p,
+        seed=seed,
+    )
     generated, _logprobs, stats = generate_with_backend(
         model,
         tokens,
         max_tokens=max_tokens,
         backend=backend,
         config=config,
+        sampler=sampler,
     )
     typer.echo(tokenizer.decode(generated.tolist()))
     typer.echo(json.dumps(stats.as_dict(), indent=2))
