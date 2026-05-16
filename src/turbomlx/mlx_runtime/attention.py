@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import warnings
 
+from turbomlx._logging import get_logger
 from turbomlx.exceptions import MissingDependencyError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime, mlx_runtime_available
 from turbomlx.mlx_runtime.config import ScorerMode
 from turbomlx.mlx_runtime.qwen_native import qwen_grouped_native_attention_output
 
+_LOGGER = get_logger(__name__)
 
 _MX_RUNTIME_READY = mlx_runtime_available()
 mx = None
@@ -36,10 +38,12 @@ def _set_cache_scorer_route(cache, route: str):
         cache.last_scorer_route = route
 
 
-def _warn_native_mlx_fallback_once(reason_key: str, message: str):
+def _warn_native_mlx_fallback_once(reason_key: str, message: str) -> None:
     if reason_key in _NATIVE_FALLBACK_WARNED_KEYS:
+        _LOGGER.debug("Suppressed duplicate native_mlx fallback warning for %s", reason_key)
         return
     _NATIVE_FALLBACK_WARNED_KEYS.add(reason_key)
+    _LOGGER.info("native_mlx fallback engaged (%s): %s", reason_key, message)
     warnings.warn(message, UserWarning, stacklevel=3)
 
 
