@@ -6,7 +6,6 @@ from turbomlx.exceptions import MissingDependencyError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime, mlx_runtime_available
 from turbomlx.mlx_runtime.config import TurboQuantMode, ValuesMode
 
-
 _MX_RUNTIME_READY = mlx_runtime_available()
 mx = None
 
@@ -35,13 +34,6 @@ def reshape_grouped_queries(queries, kv_heads: int):
     batch, query_heads, query_len, head_dim = (int(dim) for dim in queries.shape)
     group_size = qwen_group_size(query_heads, kv_heads)
     return queries.reshape(batch, kv_heads, group_size, query_len, head_dim)
-
-
-def reshape_grouped_weights(weights, kv_heads: int):
-    _require_mlx_runtime()
-    batch, query_heads, query_len, key_len = (int(dim) for dim in weights.shape)
-    group_size = qwen_group_size(query_heads, kv_heads)
-    return weights.reshape(batch, kv_heads, group_size, query_len, key_len)
 
 
 def native_qwen_support_reason(config, cache, queries, value_state):
@@ -117,8 +109,19 @@ def gather_mse_centroids_mlx(indices, centroids):
     return mx.take(centroids.astype(mx.float32), indices.astype(mx.int32), axis=0)
 
 
-def broadcast_key_norms_mlx(norms, *, group_size: int):
+def broadcast_key_norms_mlx(norms, *, group_size: int | None = None):
+    """Insert grouped-query-friendly axes around the cached key norms.
+
+    The returned tensor has shape ``[batch, kv_heads, 1, key_len, 1]`` so it
+    can broadcast against grouped rotated values shaped
+    ``[batch, kv_heads, group_size, key_len, head_dim]`` for any
+    ``group_size`` value. ``group_size`` is accepted as an explicit reminder
+    of the expected broadcast contract but is intentionally not used when
+    materializing the tensor; the broadcast happens during downstream matmul.
+    """
     _require_mlx_runtime()
+    if group_size is not None and group_size < 1:
+        raise ValueError("group_size must be >= 1 when provided")
     squeezed = mx.squeeze(norms.astype(mx.float32), axis=-1)
     return squeezed[:, :, None, :, None]
 

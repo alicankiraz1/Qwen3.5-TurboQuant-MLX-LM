@@ -5,7 +5,6 @@ from typer.testing import CliRunner
 
 from turbomlx.cli import app
 
-
 runner = CliRunner()
 
 

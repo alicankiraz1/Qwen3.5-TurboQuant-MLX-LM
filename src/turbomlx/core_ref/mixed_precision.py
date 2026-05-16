@@ -11,20 +11,32 @@ from .quantizers import MSEPayload, ProdPayload, TurboQuantMSERef, TurboQuantPro
 
 @dataclass(slots=True)
 class MixedPrecisionProfile:
+    """User-facing mixed-precision quantization profile.
+
+    ``dim`` is the head dimension and defaults to ``0`` so callers may build
+    a partial profile (e.g. from a CLI flag set) and have the surrounding
+    runtime fill it in with the model's head dimension before quantization.
+    Quantizers reject profiles with ``dim == 0`` so the placeholder default
+    is never silently accepted at runtime.
+    """
+
     outlier_channels: int
     outlier_high_bits: int
     regular_bits: int
     selection_policy: str = "calibration_variance"
     mode: str = "mse"
+    dim: int = 0
 
     @property
     def effective_bits(self) -> float:
+        if self.dim <= 0:
+            raise ValueError("MixedPrecisionProfile.dim must be set before reading effective_bits")
+        if self.outlier_channels >= self.dim:
+            raise ValueError("outlier_channels must be strictly less than dim")
         total = (self.outlier_channels * self.outlier_high_bits) + (
             self.regular_bits * (self.dim - self.outlier_channels)
         )
         return total / float(self.dim)
-
-    dim: int = 0
 
 
 @dataclass(slots=True)

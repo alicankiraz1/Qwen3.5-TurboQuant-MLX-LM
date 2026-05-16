@@ -9,7 +9,6 @@ from turbomlx.mlx_runtime.availability import mlx_runtime_available
 from turbomlx.mlx_runtime.config import TurboQuantConfig
 from turbomlx.mlx_runtime.generation import generate_with_backend
 
-
 pytestmark = pytest.mark.skipif(
     not mlx_runtime_available(),
     reason="MLX runtime is unavailable in this environment.",

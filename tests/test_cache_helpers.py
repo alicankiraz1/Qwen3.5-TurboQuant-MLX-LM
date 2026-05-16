@@ -5,13 +5,13 @@ import pytest
 
 from turbomlx.core_ref.quantizers import TurboQuantMSERef
 from turbomlx.mlx_runtime.cache import (
+    TurboQuantKVCache,
     _deserialize_meta_state,
     _materialize_dense_keys_numpy,
     _safe_numpy_array,
     _serialize_meta_state,
     _slice_token_axis,
     _token_axis_length,
-    TurboQuantKVCache,
 )
 from turbomlx.mlx_runtime.config import (
     MixedPrecisionProfileConfig,

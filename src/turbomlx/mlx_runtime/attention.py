@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import warnings
 
+from turbomlx._logging import get_logger
 from turbomlx.exceptions import MissingDependencyError
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime, mlx_runtime_available
 from turbomlx.mlx_runtime.config import ScorerMode
 from turbomlx.mlx_runtime.qwen_native import qwen_grouped_native_attention_output
 
+_LOGGER = get_logger(__name__)
 
 _MX_RUNTIME_READY = mlx_runtime_available()
 mx = None
@@ -36,10 +38,12 @@ def _set_cache_scorer_route(cache, route: str):
         cache.last_scorer_route = route
 
 
-def _warn_native_mlx_fallback_once(reason_key: str, message: str):
+def _warn_native_mlx_fallback_once(reason_key: str, message: str) -> None:
     if reason_key in _NATIVE_FALLBACK_WARNED_KEYS:
+        _LOGGER.debug("Suppressed duplicate native_mlx fallback warning for %s", reason_key)
         return
     _NATIVE_FALLBACK_WARNED_KEYS.add(reason_key)
+    _LOGGER.info("native_mlx fallback engaged (%s): %s", reason_key, message)
     warnings.warn(message, UserWarning, stacklevel=3)
 
 
@@ -172,13 +176,28 @@ def turboquant_scaled_dot_product_attention(queries, _keys, value_state, cache, 
 
 
 def dispatch_attention(previous):
+    """Wrap the upstream ``scaled_dot_product_attention`` symbol.
+
+    The patched dispatcher accepts the optional ``sinks`` argument that
+    mlx-lm 0.31.3+ added for attention-sink models. TurboQuantKVCache does
+    not have a key-path implementation of the sink interaction yet, so we
+    explicitly raise an :class:`UnsupportedConfigurationError` with a
+    descriptive message instead of silently dropping sinks; for every
+    non-TurboQuant cache we forward the sinks argument verbatim so the
+    upstream stack is untouched.
+    """
     if not _MX_RUNTIME_READY:
         raise MissingDependencyError("MLX runtime dependencies are missing.")
 
     def _patched(queries, keys, values, cache, scale, mask, sinks=None):
         if _is_turboquant_cache(cache):
             if sinks is not None:
-                raise ValueError("TurboQuantKVCache does not support attention sinks.")
+                from turbomlx.exceptions import UnsupportedConfigurationError
+
+                raise UnsupportedConfigurationError(
+                    "TurboQuantKVCache does not support attention sinks. "
+                    "Switch to backend='baseline' or backend='mlx_quant' for sink-using models."
+                )
             return turboquant_scaled_dot_product_attention(queries, keys, values, cache, scale, mask)
         return previous(queries, keys, values, cache, scale=scale, mask=mask, sinks=sinks)
 

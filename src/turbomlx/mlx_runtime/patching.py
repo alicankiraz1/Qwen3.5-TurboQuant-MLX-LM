@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
-import warnings
 
 from turbomlx.mlx_runtime.attention import dispatch_attention
 from turbomlx.mlx_runtime.availability import ensure_mlx_runtime
@@ -116,7 +116,7 @@ def patched_attention_dispatch():
 
 def patch_model_for_turbomlx_experimental(model, config: TurboQuantConfig):
     patch_attention_dispatch()
-    setattr(model, "_turbomlx_config", config)
+    model._turbomlx_config = config
     return model
 
 

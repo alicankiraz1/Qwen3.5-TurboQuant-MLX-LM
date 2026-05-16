@@ -2,25 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from math import exp, lgamma, log, pi
+from collections.abc import Iterable
+from dataclasses import dataclass
+from math import lgamma, log, pi
 from pathlib import Path
-import tempfile
-from typing import Iterable
 
 import numpy as np
-
 
 CODEBOOK_VERSION = "v1-lloyd-max-beta"
 _EPS = 1e-8
 
 
+def _xdg_cache_home() -> Path:
+    configured = os.environ.get("XDG_CACHE_HOME")
+    if configured:
+        return Path(configured)
+    return Path.home() / ".cache"
+
+
 def default_cache_dir() -> Path:
+    """Return the persistent root cache directory for codebooks and rotations.
+
+    Precedence:
+      1. ``TURBOMLX_CACHE_DIR`` environment variable (explicit user override).
+      2. ``${XDG_CACHE_HOME}/turbomlx`` for XDG-compliant environments.
+      3. ``~/.cache/turbomlx`` as the cross-platform persistent default.
+    """
     configured = os.environ.get("TURBOMLX_CACHE_DIR")
     if configured:
         return Path(configured)
-    return Path(tempfile.gettempdir()) / "turbomlx"
+    return _xdg_cache_home() / "turbomlx"
 
 
 @dataclass(frozen=True, slots=True)

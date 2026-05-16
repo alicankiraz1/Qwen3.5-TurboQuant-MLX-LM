@@ -5,14 +5,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from turbomlx.core_ref.quantizers import MSEPayload, TurboQuantMSERef
 from turbomlx.core_ref.packing import unpack_bits
+from turbomlx.core_ref.quantizers import MSEPayload, TurboQuantMSERef
 from turbomlx.mlx_runtime.config import ScorerMode, TurboQuantConfig, TurboQuantMode, ValuesMode
 from turbomlx.mlx_runtime.qwen_native import (
     gather_mse_centroids_mlx,
     native_qwen_support_reason,
-    qwen_grouped_mse_scores_mlx,
     qwen_group_size,
+    qwen_grouped_mse_scores_mlx,
     reshape_grouped_queries,
     supports_qwen_native_mlx,
     unpack_packed_indices_4bit_mlx,

@@ -7,8 +7,7 @@ import pytest
 
 from turbomlx.exceptions import UnsupportedConfigurationError
 from turbomlx.mlx_runtime import generation
-from turbomlx.mlx_runtime.config import TurboQuantConfig
-from turbomlx.mlx_runtime.config import ScorerMode
+from turbomlx.mlx_runtime.config import ScorerMode, TurboQuantConfig
 from turbomlx.mlx_runtime.generation import _cache_metrics, _effective_scorer_route, convert_prompt_cache
 from turbomlx.mlx_runtime.metrics import MemoryMetrics
 
@@ -52,6 +51,9 @@ class _MetricsAwareCache:
 
 
 class _FakeMx:
+    int32 = np.int32
+    float32 = np.float32
+
     def logsumexp(self, logits, axis=-1, keepdims=True):
         return np.log(np.sum(np.exp(logits), axis=axis, keepdims=keepdims))
 
@@ -66,6 +68,9 @@ class _FakeMx:
 
     def array(self, value, dtype=None):
         return np.array(value, dtype=dtype)
+
+    def zeros(self, shape, dtype=None):
+        return np.zeros(shape, dtype=dtype or np.float32)
 
 
 def test_convert_prompt_cache_rejects_unsupported_rotating_cache(monkeypatch):
@@ -155,6 +160,45 @@ def test_effective_scorer_route_reports_native_when_no_fallback_occurred():
     assert route == "native_mlx"
 
 
+def test_score_tokens_with_backend_uses_single_chunked_forward_pass(monkeypatch):
+    """Batched scoring should issue O(prompt/chunk_size) forward passes, not one per token."""
+    fake_mx = _FakeMx()
+    cache_mod = SimpleNamespace(make_prompt_cache=lambda _model: [SimpleNamespace(state=())])
+
+    forward_calls: list[int] = []
+
+    def fake_take_along_axis(values, indices, axis=-1):
+        gathered = np.take_along_axis(values, indices, axis=axis)
+        return gathered
+
+    fake_mx.take_along_axis = fake_take_along_axis
+    fake_mx.concatenate = lambda items, axis=0: np.concatenate(list(items), axis=axis)
+
+    class _DeterministicModel:
+        def __call__(self, inputs, cache=None):
+            forward_calls.append(int(inputs.shape[1]))
+            seq_len = int(inputs.shape[1])
+            return np.tile(np.arange(4, dtype=np.float32)[None, None, :], (1, seq_len, 1))
+
+    monkeypatch.setattr(generation, "mlx_runtime_available", lambda: True)
+    monkeypatch.setattr(generation, "ensure_mlx_runtime", lambda: (fake_mx, object(), cache_mod))
+    monkeypatch.setattr(generation, "patch_attention_dispatch", lambda: None)
+    monkeypatch.setattr(generation, "convert_prompt_cache", lambda prompt_cache, config, backend="turbomlx": prompt_cache)
+
+    prompt_tokens = np.array([0, 1, 2, 3, 0, 1, 2, 3], dtype=np.int32)
+    token_logprobs, _metrics = generation.score_tokens_with_backend(
+        _DeterministicModel(),
+        prompt_tokens,
+        backend="baseline",
+        config=TurboQuantConfig(bits_total=4),
+        chunk_size=4,
+    )
+
+    assert token_logprobs.shape == (7,)
+    assert forward_calls == [4, 3]
+    assert len(forward_calls) < prompt_tokens.size - 1
+
+
 def test_generate_with_backend_counts_full_prompt_elapsed_and_only_timed_decode_tokens(monkeypatch):
     fake_mx = _FakeMx()
     cache_mod = SimpleNamespace(make_prompt_cache=lambda _model: [SimpleNamespace(state=np.zeros((1,), dtype=np.uint8))])
@@ -187,3 +231,53 @@ def test_generate_with_backend_counts_full_prompt_elapsed_and_only_timed_decode_
     assert stats.timed_generation_tokens == 2
     assert stats.prompt_tps == pytest.approx(4.0)
     assert stats.generation_tps == pytest.approx(1.0)
+
+
+def test_stream_with_backend_emits_one_event_per_generated_token(monkeypatch):
+    """The streaming variant should yield exactly ``max_tokens`` events.
+
+    The prefill phase makes one model call per chunk plus a final
+    single-token call for the position the model needs to score, after
+    which the decode phase issues ``max_tokens - 1`` autoregressive
+    forward passes. ``prefill_step_size`` is chosen so the prefill never
+    needs to chunk in the middle of the prompt and the single-token
+    prefill tail is observable below.
+    """
+    fake_mx = _FakeMx()
+    cache_mod = SimpleNamespace(make_prompt_cache=lambda _model: [SimpleNamespace(state=np.zeros((1,), dtype=np.uint8))])
+
+    forward_history: list[tuple[int, int]] = []
+
+    class _FakeModel:
+        def __call__(self, inputs, cache=None):
+            seq_len = int(inputs.shape[1])
+            forward_history.append((int(inputs.shape[0]), seq_len))
+            logits = np.zeros((1, seq_len, 4), dtype=np.float32)
+            logits[:, :, 2] = 5.0
+            return logits
+
+    monkeypatch.setattr(generation, "mlx_runtime_available", lambda: True)
+    monkeypatch.setattr(generation, "ensure_mlx_runtime", lambda: (fake_mx, object(), cache_mod))
+    monkeypatch.setattr(generation, "patch_attention_dispatch", lambda: None)
+    monkeypatch.setattr(generation, "convert_prompt_cache", lambda prompt_cache, config, backend="turbomlx": prompt_cache)
+
+    prompt_tokens = np.array([1, 2, 3, 4], dtype=np.int32)
+    stream = generation.stream_with_backend(
+        _FakeModel(),
+        prompt_tokens,
+        max_tokens=3,
+        backend="baseline",
+        config=TurboQuantConfig(bits_total=4),
+        prefill_step_size=64,
+    )
+
+    events = list(stream)
+    assert [event.token for event in events] == [2, 2, 2]
+    assert [event.position for event in events] == [0, 1, 2]
+    assert all(event.logprob <= 0.0 for event in events)
+    prefill_calls = [call for call in forward_history if call[1] > 1]
+    decode_calls = [call for call in forward_history if call[1] == 1]
+    assert len(prefill_calls) == 1, "single-chunk prefill should issue exactly one multi-token forward pass"
+    assert len(decode_calls) == len(events) - 1 + 1, (
+        "decode count = (max_tokens - 1) + the single-token prefill tail"
+    )

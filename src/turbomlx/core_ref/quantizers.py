@@ -10,7 +10,7 @@ from .artifacts import resolve_shared_artifacts
 from .codebooks import CODEBOOK_VERSION
 from .packing import pack_bits, pack_sign_bits, unpack_bits, unpack_sign_bits
 from .qjl import QJLSpec, qjl_dequantize, qjl_quantize_signs, qjl_score_correction
-from .rotation import RotationSpec, apply_inverse_rotation, apply_rotation
+from .rotation import apply_inverse_rotation, apply_rotation
 
 _EPS = 1e-8
 
@@ -64,6 +64,8 @@ class TurboQuantMSERef:
         self.codebook = artifacts.codebook
         self.rotation = artifacts.rotation
         self.centroids = self.codebook.centroids
+        self.boundaries = self.codebook.boundaries
+        self._max_index = np.uint8(self.centroids.shape[0] - 1)
 
     @property
     def codebook_id(self) -> str:
@@ -86,9 +88,22 @@ class TurboQuantMSERef:
         return x.astype(np.float32) / np.maximum(norms, _EPS), norms
 
     def _quantize_unit(self, x_unit: np.ndarray) -> np.ndarray:
+        """Map rotated entries to their nearest centroid.
+
+        Lloyd-Max boundaries are the optimal midpoints between adjacent
+        centroids on the post-rotation distribution. ``np.searchsorted``
+        therefore finds the nearest centroid in ``O(N log K)`` time without
+        materializing the broadcast ``[..., head_dim, K]`` difference
+        tensor used by the previous ``argmin`` implementation, which could
+        allocate several gigabytes for long-context Qwen layers.
+        """
         rotated = apply_rotation(x_unit, self.rotation)
-        diff = np.abs(rotated[..., None] - self.centroids[None, ...])
-        return np.argmin(diff, axis=-1).astype(np.uint8)
+        indices = np.searchsorted(self.boundaries, rotated, side="right")
+        if indices.dtype != np.uint8:
+            indices = np.clip(indices, 0, int(self._max_index)).astype(np.uint8)
+        else:
+            np.clip(indices, 0, self._max_index, out=indices)
+        return indices
 
     def _dequantize_unit(self, packed_indices: np.ndarray, leading_shape: tuple[int, ...]) -> np.ndarray:
         indices = unpack_bits(packed_indices, self.bits_total, self.head_dim).reshape(leading_shape + (self.head_dim,))
