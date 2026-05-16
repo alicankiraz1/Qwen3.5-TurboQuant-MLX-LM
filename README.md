@@ -26,7 +26,7 @@ Important limitations:
 - runtime preview is Qwen-first and currently patches `qwen3_next` plus the shared `mlx_lm.models.base` dispatch symbol
 - mixed-architecture Qwen stacks remain experimental as a whole; TurboQuant conversion applies only to full-attention `KVCache` layers and leaves linear-attention `ArraysCache` layers untouched
 - rotating/sliding-window families remain unsupported in preview
-- `v0.1 Research Preview` focuses on correctness and quality gates, not throughput leadership
+- `v0.2 Modernization Preview` focuses on correctness, fidelity, and surface modernization — not throughput parity with `mlx_quant` on the prefill phase
 - preview runtime scoring defaults to `oracle_preview`; a narrow `native_mlx` scorer preview now exists only for Qwen3 / Qwen3.5 full-attention `KVCache` with `mode=mse`, `bits_total=4`, and `values_mode=dense`
 - `native_mlx` is a Stage A remediation path, not the final packed-index direct score-space scorer
 - the supported public runtime entrypoints are `generate_with_backend`, `convert_prompt_cache`, `save_prompt_cache`, and `load_prompt_cache`
@@ -48,53 +48,95 @@ pip install -e ".[serialize]"     # add safetensors v3 prompt-cache support
 pip install -e ".[dev]"           # add pytest, ruff, mypy for development
 ```
 
-## Latest Verification Snapshot
+## v0.2 Verification Snapshot
 
-Tested on `2026-03-29` with:
+Tested on `2026-05-16` with:
 
-- `mlx==0.31.1`
-- `mlx-lm==0.31.1`
-- smoke model: `mlx-community/Qwen3.5-9B-MLX-4bit`
+- **Hardware**: Apple `M5 Max`, `64 GB` unified memory, macOS `26.4.1`
+- `mlx==0.31.2`
+- `mlx-lm==0.31.3`
+- `numpy==2.4.5`
+- `safetensors==0.7.0`
+- smoke model: `mlx-community/Qwen3.5-9B-MLX-4bit` (hybrid: 8 full-attention + 24 linear-attention layers, `head_dim=256`)
 
 Verification results:
 
 - `python3 -m compileall src` passed
-- `PYTHONPATH=src .venv/bin/python -m pytest -q` -> `72 passed, 1 skipped`
+- `pytest -q` -> **`97 passed, 7 skipped`** (skipped suites require the optional MLX backend on Apple Silicon)
+- `ruff check src/ tests/` -> clean
 - Qwen native smoke generate passed with `scorer_route = native_mlx`
-- short native smoke snapshot:
-  - `prompt_tps`: `54.70`
-  - `generation_tps`: `42.59`
-  - `key_path_bytes`: `26504384`
-  - `total_kv_bytes`: `27110976`
-  - `native_working_set_bytes`: `1212416`
 
-Benchmark snapshot on the tested Apple Silicon stack. All numbers below are medians with warmup `1` and repeats `3`.
+### Backend comparison
 
-### 512 Prompt / 64 Generation
+All numbers are medians with `warmup_runs=1` and `repeats=3`, produced by
+[`scripts/compare_backends.py`](scripts/compare_backends.py). Lower
+`Key Path` / `Total KV` is better; higher TPS is better. The `Native WS`
+column is the on-device cost of the `native_mlx` scorer rotation /
+centroid lookup tables.
 
-| Route | Prompt TPS | Decode TPS | Key Path | Total KV | Native Working Set | Scorer Route |
+#### 128 Prompt / 16 Generation
+
+| Route | Prompt TPS | Decode TPS | Key Path | Total KV | Native WS | Scorer Route |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `baseline` | `1394.12` | `55.00` | `43.10 MiB` | `43.10 MiB` | `0.00 MiB` | `baseline` |
-| `mlx_quant` | `1366.74` | `47.83` | `30.18 MiB` | `30.18 MiB` | `0.00 MiB` | `mlx_quant` |
-| `turbomlx` + `oracle_preview` | `285.39` | `42.02` | `45.41 MiB` | `54.40 MiB` | `0.00 MiB` | `oracle_preview` |
-| `turbomlx` + `native_mlx` | `380.04` | `42.71` | `27.44 MiB` | `36.43 MiB` | `17.97 MiB` | `native_mlx` |
+| `baseline` | `2421.90` | `93.52` | `53.60 MiB` | `53.60 MiB` | `0.00 MiB` | `baseline` |
+| `mlx_quant` | `2366.65` | `85.33` | `50.39 MiB` | `50.39 MiB` | `0.00 MiB` | `mlx_quant` |
+| `turbomlx` + `oracle_preview` | `1019.96` | `70.50` | `54.17 MiB` | `56.41 MiB` | `0.00 MiB` | `oracle_preview` |
+| `turbomlx` + `native_mlx` | `1054.23` | `70.94` | `49.70 MiB` | `51.94 MiB` | `4.47 MiB` | `native_mlx` |
 
-### 2048 Prompt / 64 Generation
+#### 512 Prompt / 64 Generation
 
-| Route | Prompt TPS | Decode TPS | Key Path | Total KV | Native Working Set | Scorer Route |
+| Route | Prompt TPS | Decode TPS | Key Path | Total KV | Native WS | Scorer Route |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `baseline` | `1419.62` | `54.32` | `91.10 MiB` | `91.10 MiB` | `0.00 MiB` | `baseline` |
-| `mlx_quant` | `1365.77` | `52.10` | `43.68 MiB` | `43.68 MiB` | `0.00 MiB` | `mlx_quant` |
-| `turbomlx` + `oracle_preview` | `285.52` | `39.50` | `99.60 MiB` | `132.58 MiB` | `0.00 MiB` | `oracle_preview` |
-| `turbomlx` + `native_mlx` | `401.84` | `40.44` | `33.63 MiB` | `66.62 MiB` | `65.97 MiB` | `native_mlx` |
+| `baseline` | `3252.99` | `93.55` | `67.10 MiB` | `67.10 MiB` | `0.00 MiB` | `baseline` |
+| `mlx_quant` | `3225.92` | `87.67` | `54.18 MiB` | `54.18 MiB` | `0.00 MiB` | `mlx_quant` |
+| `turbomlx` + `oracle_preview` | `1274.40` | `67.32` | `69.41 MiB` | `78.40 MiB` | `0.00 MiB` | `oracle_preview` |
+| `turbomlx` + `native_mlx` | `1327.78` | `68.07` | `51.44 MiB` | `60.43 MiB` | `17.97 MiB` | `native_mlx` |
+
+#### 2048 Prompt / 64 Generation
+
+| Route | Prompt TPS | Decode TPS | Key Path | Total KV | Native WS | Scorer Route |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `baseline` | `3436.54` | `90.34` | `115.10 MiB` | `115.10 MiB` | `0.00 MiB` | `baseline` |
+| `mlx_quant` | `3085.89` | `84.31` | `67.68 MiB` | `67.68 MiB` | `0.00 MiB` | `mlx_quant` |
+| `turbomlx` + `oracle_preview` | `1207.17` | `66.68` | `123.60 MiB` | `156.58 MiB` | `0.00 MiB` | `oracle_preview` |
+| `turbomlx` + `native_mlx` | `1182.38` | `65.73` | **`57.63 MiB`** | **`90.62 MiB`** | `65.97 MiB` | `native_mlx` |
 
 Interpretation:
 
 - this snapshot is environment-specific and not a throughput guarantee
-- the strongest current TurboQuant signal is inside the same `turbomlx` backend: `scorer_route = native_mlx` produces nonzero `native_working_set_bytes`, lower key-path memory, and lower total KV bytes than `oracle_preview`
-- at `512/64`, `native_mlx` reduced key-path memory by `39.57%`, reduced total KV bytes by `33.03%`, improved prompt TPS by `33.16%`, and improved decode TPS by `1.65%` versus `oracle_preview`
-- at `2048/64`, `native_mlx` reduced key-path memory by `66.23%`, reduced total KV bytes by `49.76%`, improved prompt TPS by `40.74%`, and improved decode TPS by `2.38%` versus `oracle_preview`
-- this repo does not claim throughput parity with `baseline` or `mlx_quant`; the current research-preview claim is that TurboQuant is active and measurably changes the `turbomlx` runtime profile
+- at `2048/64`, `turbomlx` + `native_mlx` cuts the key-path footprint **`50.0%` versus `baseline`** (`115.10` -> `57.63 MiB`) and **`14.9%` versus `mlx_quant`** (`67.68` -> `57.63 MiB`) — confirming that TurboQuant's key-path compression beats stock 4-bit affine on the long-context profile that motivated the paper
+- inside the `turbomlx` backend, switching from `oracle_preview` to `native_mlx` reduces key-path memory by **`53.4%`** at `2048/64` (`123.60` -> `57.63 MiB`) and total KV bytes by **`42.1%`** (`156.58` -> `90.62 MiB`)
+- prompt-prefill throughput is still preview-grade (~`1/3` of `baseline`); this is the headline cost of the current NumPy ↔ MLX boundary in the quantization path and is the next target for `v0.3`
+
+### Fidelity vs baseline (last-token logits)
+
+Same prompt replayed across backends; `cos` is the cosine similarity of
+the trailing logits, `top-K` is the share of the K highest-logit tokens
+that match `baseline`, and `mean|Δlogprob|` is the average absolute
+difference between normalized log-probabilities. Generated by
+[`scripts/quality_check.py`](scripts/quality_check.py).
+
+#### Short prompt (37 tokens)
+
+| Route | Cosine sim | Top-1 | Top-5 | Top-10 | mean \|Δlogprob\| |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mlx_quant` | `0.996038` | `1.00` | `1.00` | `0.90` | `0.2019` |
+| `turbomlx` + `oracle_preview` | `0.998911` | `1.00` | `1.00` | `0.90` | `0.0855` |
+| `turbomlx` + `native_mlx` | `0.998911` | `1.00` | `1.00` | `0.90` | `0.0859` |
+
+#### Longer prompt (400 tokens)
+
+| Route | Cosine sim | Top-1 | Top-5 | Top-10 | mean \|Δlogprob\| |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mlx_quant` | `0.999646` | `1.00` | `1.00` | `0.90` | `0.1872` |
+| `turbomlx` + `oracle_preview` | **`0.999948`** | `1.00` | `1.00` | **`1.00`** | `0.1017` |
+| `turbomlx` + `native_mlx` | **`0.999941`** | `1.00` | `1.00` | **`1.00`** | **`0.0878`** |
+
+Interpretation:
+
+- TurboQuant's key-path compression is **measurably more faithful to the baseline distribution than `mlx_quant`** on this Qwen3.5-9B-MLX-4bit smoke target — higher cosine similarity, full top-10 agreement on the long prompt, and ~half the mean `|Δlogprob|`
+- `oracle_preview` and `native_mlx` produce statistically equivalent logits at `bits_total=4`, as expected: they share the same quantization and only differ in the scoring path
+- this is a smoke-grade signal, not a benchmark; for end-to-end task evaluation use `eval-needle` / `eval-jsonl` against a real dataset
 
 ## Bit Semantics
 
@@ -130,6 +172,12 @@ integer-bit configurations.
   - prompt-cache continuity
   - long-context quality helpers
   - honest benchmark reporting
+- `v0.2 Modernization Preview` (current)
+  - all of `v0.1`
+  - refreshed MLX / mlx-lm / NumPy 2.x / Typer envelopes
+  - performance: vectorized `pack_bits` (~`52x`), `searchsorted` codebook lookup, chunked perplexity
+  - security: optional `safetensors` v3 prompt-cache + class allowlist
+  - API: `make_sampler`, `stream_with_backend`, attention-sinks dispatch wiring
 - `v1.0 Stable`
   - all of the above
   - explicit `mlx_quant` decode parity target on the reference benchmark matrix
@@ -154,10 +202,15 @@ Experimental:
 
 ## Prompt-Cache Policy
 
-- prompt-cache files are trusted-local-only and currently remain `pickle`-backed
-- schema `v2` is the current write format and includes `cache_type_id` metadata
-- schema `v1` files still load in read-only compatibility mode via deprecated `class_path` fallback
-- if you load an older cache, re-save it to migrate to `v2`
+- prompt-cache files are trusted-local-only
+- schema `v3` is the current default write format when the optional `safetensors` dependency is installed (`pip install turbomlx[serialize]`)
+  - structural metadata lives in a typed JSON header
+  - numerical arrays live in a `safetensors` container — zero-copy reads, no pickle bytecode in the payload
+  - a 4-byte `TQS3` magic prefix lets the loader auto-detect the format
+- schema `v2` (pickle with stable `cache_type_id` metadata) remains writable for environments without `safetensors`
+- schema `v1` files still load in read-only compatibility mode via deprecated `class_path` fallback, but only for class paths registered through `register_cache_type()`
+- the v1 / v2 loader no longer imports arbitrary `class_path` values — third-party cache classes must opt in via `turbomlx.register_cache_type(cache_type_id, class_path)`
+- if you load an older cache, re-save it with TurboMLX `>=0.2` to migrate to schema `v3`
 
 ## Qwen Preview Runtime
 
@@ -176,9 +229,12 @@ Experimental:
 
 ## Verification
 
-- unit and regression suite: `PYTHONPATH=src .venv/bin/python -m pytest -q`
-- MLX smoke and benchmark authority: `.venv312`
-- recommended smoke target: `TURBOMLX_SMOKE_QWEN_MODEL=/Users/alican/.lmstudio/models/mlx-community/Qwen3.5-9B-MLX-4bit`
+- unit and regression suite: `pytest -q` (uses `pythonpath = ["src"]` from `pyproject.toml`)
+- lint: `ruff check src/ tests/`
+- MLX smoke and benchmark authority: any Python 3.11+ venv with `pip install -e ".[mlx,dev]"` on Apple Silicon
+- recommended smoke target: set `TURBOMLX_SMOKE_QWEN_MODEL=/path/to/mlx-community/Qwen3.5-9B-MLX-4bit` and run `pytest tests/test_mlx_smoke.py`
+- side-by-side backend benchmark: `python scripts/compare_backends.py --prompt-tokens 2048 --generation-tokens 64`
+- last-token logit fidelity check: `python scripts/quality_check.py`
 - benchmark methodology for current preview work:
   - use at least 1 warmup run
   - use at least 3 measured repeats
